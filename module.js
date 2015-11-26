@@ -85,7 +85,11 @@ Module.fire = function() {
                     modules[c].factory(Module.require,modules[c].exports);
                     Module.cache[c].status = STATUS.EXECUTED;
                     delete modules[c];
-                } else {
+                }
+                else if(modules[c].status === STATUS.EXECUTED){//已执行过的不再执行
+                    delete modules[c];   
+                } 
+                else {
                     var canFire = true;
                     for (var i = 0; i < modules[c].deps.length; i++) {
                         if (Module.cache[modules[c].deps[i]].status<STATUS.EXECUTED) {//依赖模块未保存，不能执行
