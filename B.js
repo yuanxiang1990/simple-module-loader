@@ -3,4 +3,7 @@
  */
 Module.define('B',"C",function(require,exports){
     alert('b');
+    exports.aaa = function(){
+    	alert("aaa");
+    }
 })
