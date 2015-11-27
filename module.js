@@ -87,7 +87,7 @@ Module.fire = function() {
                     delete modules[c];
                 }
                 else if(modules[c].status === STATUS.EXECUTED){//已执行过的不再执行
-                    delete modules[c];   
+                    delete modules[c];    
                 } 
                 else {
                     var canFire = true;
