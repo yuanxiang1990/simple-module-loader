@@ -50,11 +50,14 @@ Module.load = function(id) {
     Module.loadJs(id, function() {
         if (Module.cache[id].deps.length > 0) {
             for (var i = 0; i < Module.cache[id].deps.length; i++) {
-                Module.load(Module.cache[id].deps[i]);
+                var depId = Module.cache[id].deps[i];
+                if(Module.cache[depId].status === STATUS.FETCHING){
+                    Module.load(depId);
+                }
             }
         }
         if (Module.check()) { //全部模块load完成
-            Module.fire();
+            Module.fire();            
         }
     });
 }
@@ -82,8 +85,7 @@ Module.fire = function() {
         for (var c in modules) {
             if (modules.hasOwnProperty(c)) {
                 if (modules[c].status === STATUS.READY) {
-                    modules[c].factory(Module.require,modules[c].exports);
-                    Module.cache[c].status = STATUS.EXECUTED;
+                    Module.execute(modules[c]);
                     delete modules[c];
                 }
                 else if(modules[c].status === STATUS.EXECUTED){//已执行过的不再执行
@@ -92,20 +94,28 @@ Module.fire = function() {
                 else {
                     var canFire = true;
                     for (var i = 0; i < modules[c].deps.length; i++) {
-                        if (Module.cache[modules[c].deps[i]].status<STATUS.EXECUTED) {//依赖模块未保存，不能执行
+                        if (Module.cache[modules[c].deps[i]].status<STATUS.EXECUTED) {//依赖模块未执行过，不能执行
                             canFire = false;
                             break;
                         }
                     }
                     if (canFire) {
-                        modules[c].factory(Module.require,modules[c].exports);
-                        Module.cache[c].status = STATUS.EXECUTED;
+                        Module.execute(modules[c]);
                         delete modules[c];
                     }
                 }
             }
         }
     }
+}
+
+/**
+*执行模块factory函数
+**/
+Module.execute = function(module){
+    Module.cache[module.id].status = STATUS.EXECUTING;
+    module.factory(Module.require,module.exports);
+    Module.cache[module.id].status = STATUS.EXECUTED;
 }
 Module.copy = function(target, copy) {
     for (var c in copy) {

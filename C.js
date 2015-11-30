@@ -3,4 +3,5 @@
  */
 Module.define('C',[],function(require,exports){
     alert('c');
+   
 })
