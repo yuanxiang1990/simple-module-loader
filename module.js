@@ -5,14 +5,19 @@
 Module.config = {} //模块配置
 Module.cache = { //模块缓存
 }
-var callbackList = {} //回调列
-var STATUS = {　　
-    FETCHING: 1, // The module file is fetching now. 模块正在下载中 
-    　　FETCHED: 2, // The module file has been fetched. 模块已下载 
-    　　SAVED: 3, // The module info has been saved. 模块信息已保存 
-    　　READY: 4, // All dependencies and self are ready to compile. 模块的依赖项都已下载，等待编译 
-    EXECUTING: 5, // The module is in compiling now. 模块正在执行
-    EXECUTED: 6 // The module is compiled and module.exports is available. 模块已执行 
+var STATUS = Module.STATUS = {
+    // 1 - The `module.uri` is being fetched
+    FETCHING: 1,
+    // 2 - The meta data has been saved to cachedMods
+    SAVED: 2,
+    // 3 - The `module.dependencies` are being loaded
+    LOADING: 3,
+    // 4 - The module are ready to execute
+    LOADED: 4,
+    // 5 - The module is being executed
+    EXECUTING: 5,
+    // 6 - The `module.exports` is available
+    EXECUTED: 6
 }
 
 function Module(id) {
@@ -20,14 +25,15 @@ function Module(id) {
     this.deps = []; //模块依赖
     this.factory = null; //模块方法
     this.exports = {}; //模块返回接口
-    this.status = STATUS.FETCHED; //模块当前状态,初始化时模块已下载
+    this.status = STATUS.FETCHING; //模块当前状态,初始化时模块已下载
+    // Who depends on me
+    this._waitings = {}
+    // The number of unloaded dependencies
+    this._remain = 0
 }
 Module.regr_ready = /(loaded|complete|undefined)/i;
-Module.define = function(id, deps, fn) {
-    if (Module["cache"][id] && Module["cache"][id].status >= STATUS.SAVED) {
-        return;
-    }
-    var module = Module["cache"][id] || new Module(id);
+Module.define = function (id, deps, fn) {
+    var module = Module.get(id);
     if (typeof deps == "string") {
         deps = Array.call([], deps);
     } else if (!deps instanceof Array) {
@@ -35,95 +41,94 @@ Module.define = function(id, deps, fn) {
     }
     module.factory = fn;
     module.deps = deps;
-    if (deps.length == 0) { //没有依赖，直接将模板置为ready状态
-        module.status = STATUS.READY;
-    } else {
-        module.status = STATUS.SAVED; //模块信息已保存
-    }
-    Module.cache[id] = module;
-    for (var i = 0; i < module.deps.length; i++) {
-        var m = new Module(module.deps[i]);
-        m.status = STATUS.FETCHING; //置模块状态为正在下载中状态
-        Module.cache[module.deps[i]] = m;
-    };
+    module.status = STATUS.SAVED;
 }
-Module.use = function(id, callback) { //模块加载入口方法
-    Module.load(id);
+Module.use = function (id, callback) { //模块加载入口方法
+    var mod = Module.get(id);
+    mod.load();
 }
-Module.load = function(id) {
-        Module.loadJs(id, function() {
-            if (Module.cache[id].deps.length > 0) {
-                for (var i = 0; i < Module.cache[id].deps.length; i++) {
-                    var depId = Module.cache[id].deps[i];
-                    Module.load(depId);
-                }
-            }
-            if (Module.check()) { //全部模块load完成
-                Module.fire();
-            }
-        });
+
+/**
+ * 获取模块真实路径
+ * @param id
+ */
+Module.realpath = function(id){
+    return Module.config.baseURI + id;
+}
+
+/**
+ * 加载模块
+ */
+Module.prototype.load = function () {
+    var mod = this;
+    mod.status = STATUS.LOADING;
+    function onRequest(){
+        var len = mod._remain = mod.deps.length;
+        for(var i = 0;i<len;i++){
+            var m = Module.get(mod.deps[i]);
+            m._waitings[mod.id] = 1;
+        }
+        if(mod._remain==0){
+            mod.onload();
+        }
+        //加载依赖模块
+        for(var i = 0;i<len;i++){
+            var m = Module.get(mod.deps[i]);
+            m.load();
+        }
     }
-    //加载依赖的模块
-Module.require = function(id) {
+    Module.loadJs(this.id, onRequest);
+}
+
+/**
+ * 加载完成
+ */
+Module.prototype.onload = function(){
+    var mod = this;
+    mod.status = STATUS.LOADED;
+    mod.exec();
+    //通知依赖当前模块的模块
+    for(var wait in mod._waitings){
+        if(mod._waitings.hasOwnProperty(wait)){
+            Module.cache[wait]._remain--;
+            if(Module.cache[wait]._remain==0){
+                Module.cache[wait].onload();
+            }
+        }
+    }
+}
+//加载依赖的模块
+Module.require = function (id) {
     for (var module in Module.cache) {
         if (Module.cache.hasOwnProperty(module) && id === Module.cache[module].id) {
             return Module.cache[module].exports;
         }
     }
 }
-Module.check = function() {
-        for (var module in Module.cache) {
-            if (Module.cache.hasOwnProperty(module) && Module.cache[module].status < STATUS.SAVED) {
-                return false;
-            }
-        }
-        return true;
-    }
-    //按依赖执行factory
-Module.fire = function() {
-        var modules = {};
-        Module.copy(modules, Module.cache)
-        while (Module.size(modules) > 0) {
-            for (var c in modules) {
-                if (modules.hasOwnProperty(c)) {
-                    if (modules[c].status === STATUS.READY) {
-                        Module.execute(modules[c]);
-                        delete modules[c];
-                    } else if (modules[c].status > STATUS.READY) { //已执行过的或则正在执行中的不再执行
-                        delete modules[c];
-                    } else {
-                        var canFire = true;
-                        for (var i = 0; i < modules[c].deps.length; i++) {
-                            if (Module.cache[modules[c].deps[i]].status < STATUS.EXECUTED) { //依赖模块未执行过，不能执行
-                                canFire = false;
-                                break;
-                            }
-                        }
-                        if (canFire) {
-                            Module.execute(modules[c]);
-                            delete modules[c];
-                        }
-                    }
-                }
-            }
-        }
-    }
-    /**
-     *执行模块factory函数
-     **/
-Module.execute = function(module) {
-    Module.cache[module.id].status = STATUS.EXECUTING;
-    module.factory(Module.require, module.exports);
-    Module.cache[module.id].status = STATUS.EXECUTED;
+
+Module.get = function(id){
+    id = Module.realpath(id);
+    return Module.cache[id]?Module.cache[id]:(Module.cache[id]=new Module(id));
 }
-Module.copy = function(target, copy) {
+
+/**
+ *执行模块factory函数
+ **/
+Module.prototype.exec = function () {
+    var mod = this;
+    mod.status = STATUS.EXECUTING;
+    mod.factory();
+    mod.status = STATUS.EXECUTED;
+}
+
+Module.copy = function (target, copy) {
     for (var c in copy) {
         if (copy.hasOwnProperty(c)) { //不拷贝原型链上的属性
             target[c] = copy[c];
         }
     }
 }
-Module.size = function(obj) {
+Module.size = function (obj) {
     var len = 0;
     for (var o in obj) {
         if (obj.hasOwnProperty(o)) {
@@ -132,19 +137,19 @@ Module.size = function(obj) {
     }
     return len;
 }
-Module.loadJs = function(id, callback) {
+Module.loadJs = function (id, callback) {
     var script = document.createElement('script');
     script.type = "text/javascript";
     script.defer = true;
     script.src = Module.config.baseURI + id + ".js";
     if (script.readyState) {
-        script.onreadystatechange = function() {
+        script.onreadystatechange = function () {
             if (Module.regr_ready.test(this.readyState)) {
                 callback && callback();
             }
         }
     } else {
-        script.onload = function() {
+        script.onload = function () {
             callback && callback();
         }
     }
