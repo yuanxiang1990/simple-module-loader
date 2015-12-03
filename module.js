@@ -41,7 +41,9 @@ Module.define = function (id, deps, fn) {
     }
     module.factory = fn;
     module.deps = deps;
-    module.status = STATUS.SAVED;
+    if(module.status<STATUS.SAVED) {
+        module.status = STATUS.SAVED;
+    }
 }
 Module.use = function (id, callback) { //模块加载入口方法
     var mod = Module.get(id);
@@ -70,11 +72,14 @@ Module.prototype.load = function () {
         }
         if(mod._remain==0){
             mod.onload();
+            return;
         }
         //加载依赖模块
         for(var i = 0;i<len;i++){
             var m = Module.get(mod.deps[i]);
-            m.load();
+            if(m.status === STATUS.FETCHING){
+                m.load();
+            }
         }
     }
     Module.loadJs(this.id, onRequest);
