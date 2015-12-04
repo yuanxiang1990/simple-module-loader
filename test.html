@@ -8,7 +8,9 @@
         Module.config = {
             baseURI:""
         }
-        Module.use("A");
+        Module.use("A",function(a){
+            console.log(a);
+        });
     </script>
 </head>
 <body>

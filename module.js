@@ -5,6 +5,15 @@
 Module.config = {} //模块配置
 Module.cache = { //模块缓存
 }
+function isType(type) {
+    return function(obj) {
+        return Object.prototype.toString.call(obj) === "[object " + type + "]"
+    }
+}
+var isObject = isType("Object")
+var isString = isType("String")
+var isArray = Array.isArray || isType("Array")
+var isFunction = isType("Function")
 var STATUS = Module.STATUS = {
     // 1 - The `module.uri` is being fetched
     FETCHING: 1,
@@ -20,33 +29,38 @@ var STATUS = Module.STATUS = {
     EXECUTED: 6
 }
 
-function Module(id) {
+function Module(id,deps) {
     this.id = id; //模块ID
-    this.deps = []; //模块依赖
+    this.deps = deps||[]; //模块依赖
     this.factory = null; //模块方法
     this.exports = {}; //模块返回接口
-    this.status = STATUS.FETCHING; //模块当前状态,初始化时模块已下载
+    this.status = 0; //模块当前状态
     // Who depends on me
-    this._waitings = {}
+    this._waitings = {};
     // The number of unloaded dependencies
-    this._remain = 0
+    this._remain = 0;
 }
 Module.regr_ready = /(loaded|complete|undefined)/i;
 Module.define = function (id, deps, fn) {
-    var module = Module.get(id);
-    if (typeof deps == "string") {
-        deps = Array.call([], deps);
-    } else if (!deps instanceof Array) {
-        deps = [];
-    }
+    deps = isArray(deps)?deps:[deps];
+    var module = Module.get(id,deps);
     module.factory = fn;
     module.deps = deps;
     if(module.status<STATUS.SAVED) {
         module.status = STATUS.SAVED;
     }
 }
-Module.use = function (id, callback) { //模块加载入口方法
-    var mod = Module.get(id);
+Module.use = function (ids, callback) { //模块加载入口方法
+    ids = isArray(ids)?ids:[ids];
+    var mod = Module.get(location.href,ids);
+    mod.callback = function(){
+        var exports = [];
+        for(var i = 0;i<ids.length;i++){
+            exports[i] = Module.get(ids[i]).exec();
+        }
+        console.log(exports);
+        callback&&callback.apply(window,exports);
+    }
     mod.load();
 }
 
@@ -64,23 +78,32 @@ Module.realpath = function(id){
 Module.prototype.load = function () {
     var mod = this;
     mod.status = STATUS.LOADING;
+    var len = mod._remain = mod.deps.length;
+    for(var i = 0;i<len;i++){
+        var m = Module.get(mod.deps[i]);
+        m._waitings[mod.id] = 1;
+    }
+    if(mod._remain==0){
+        mod.onload();
+        return;
+    }
+    //加载依赖模块
+    for(var i = 0;i<len;i++){
+        var m = Module.get(mod.deps[i]);
+        if(m.status<STATUS.FETCHING) {
+            m.fetch();
+        }
+    }
+}
+
+/**
+ * 取模块
+ */
+Module.prototype.fetch = function(){
+    var mod = this;
+    mod.status = STATUS.FETCHING;
     function onRequest(){
-        var len = mod._remain = mod.deps.length;
-        for(var i = 0;i<len;i++){
-            var m = Module.get(mod.deps[i]);
-            m._waitings[mod.id] = 1;
-        }
-        if(mod._remain==0){
-            mod.onload();
-            return;
-        }
-        //加载依赖模块
-        for(var i = 0;i<len;i++){
-            var m = Module.get(mod.deps[i]);
-            if(m.status === STATUS.FETCHING){
-                m.load();
-            }
-        }
+        mod.load();
     }
     Module.loadJs(this.id, onRequest);
 }
@@ -91,7 +114,9 @@ Module.prototype.load = function () {
 Module.prototype.onload = function(){
     var mod = this;
     mod.status = STATUS.LOADED;
-    mod.exec();
+    if(mod.callback){
+        mod.callback();
+    }
     //通知依赖当前模块的模块
     for(var wait in mod._waitings){
         if(mod._waitings.hasOwnProperty(wait)){
@@ -102,18 +127,10 @@ Module.prototype.onload = function(){
         }
     }
 }
-//加载依赖的模块
-Module.require = function (id) {
-    for (var module in Module.cache) {
-        if (Module.cache.hasOwnProperty(module) && id === Module.cache[module].id) {
-            return Module.cache[module].exports;
-        }
-    }
-}
 
-Module.get = function(id){
+Module.get = function(id,deps){
     id = Module.realpath(id);
-    return Module.cache[id]?Module.cache[id]:(Module.cache[id]=new Module(id));
+    return Module.cache[id]?Module.cache[id]:Module.cache[id]=new Module(id,deps);
 }
 
 /**
@@ -121,27 +138,18 @@ Module.get = function(id){
  **/
 Module.prototype.exec = function () {
     var mod = this;
+    if(mod.status>=STATUS.EXECUTING){
+        return;
+    }
+    function require(id) {
+        return Module.get(id).exec();
+    }
     mod.status = STATUS.EXECUTING;
-    mod.factory();
+    mod.factory(require,mod.exports={});
     mod.status = STATUS.EXECUTED;
+    return mod.exports;
 }
 
-Module.copy = function (target, copy) {
-    for (var c in copy) {
-        if (copy.hasOwnProperty(c)) { //不拷贝原型链上的属性
-            target[c] = copy[c];
-        }
-    }
-}
-Module.size = function (obj) {
-    var len = 0;
-    for (var o in obj) {
-        if (obj.hasOwnProperty(o)) {
-            len++;
-        }
-    }
-    return len;
-}
 Module.loadJs = function (id, callback) {
     var script = document.createElement('script');
     script.type = "text/javascript";
