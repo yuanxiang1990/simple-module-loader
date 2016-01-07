@@ -41,11 +41,32 @@ function Module(id,deps) {
     this._remain = 0;
 }
 Module.regr_ready = /(loaded|complete|undefined)/i;
-Module.define = function (id, deps, fn) {
-    deps = isArray(deps)?deps:[deps];
-    var module = Module.get(id,deps);
-    module.factory = fn;
+Module.reg_fun = /function\s*\(require,exports\)\n*\{((.|\n|\r|(\n\r))+)\}/g;//得到函数体字符串
+Module.reg_require = /require\(('|")(\w+)('|")\)/g;//匹配require
+Module.reg_single_comment = /\/\/.*(\r|\n|(\r\n))/g//匹配单行注释
+Module.reg_muti_comment = /\/\*(.|\r|\n|(\r\n))*\*\//g//匹配多行注释
+Module.define = function () {
+    var module;
+    var id = arguments[0],deps,fn;
+    if(arguments.length==3) {//带有依赖参数
+        deps = isArray(arguments[1])?arguments[1]:[arguments[1]];
+        fn = arguments[2];
+    }
+    else if(arguments.length==2){//无依赖参数，直接通过匹配函数体的require获取
+        fn = arguments[1];
+        var funStr = fn.toString();
+        deps = [];
+        var regFunBody = new RegExp(Module.reg_fun),regRequire = new RegExp(Module.reg_require);
+        regFunBody.exec(funStr);
+        var funBody = RegExp.$1;//函数体字符串
+        funBody = funBody.replace(Module.reg_single_comment,"").replace(Module.reg_muti_comment,"").replace(/('|").*require.*('|")/g,"");//去单行和多行注释,字符串变量里的require
+        while (regRequire.exec(funBody) != null)  {
+            deps.push(RegExp.$2);
+        }
+    }
+    module = Module.get(id,deps);
     module.deps = deps;
+    module.factory = fn;
     if(module.status<STATUS.SAVED) {
         module.status = STATUS.SAVED;
     }
@@ -58,7 +79,6 @@ Module.use = function (ids, callback) { //模块加载入口方法
         for(var i = 0;i<ids.length;i++){
             exports[i] = Module.get(ids[i]).exec();
         }
-        console.log(exports);
         callback&&callback.apply(window,exports);
     }
     mod.load();
@@ -92,6 +112,9 @@ Module.prototype.load = function () {
         var m = Module.get(mod.deps[i]);
         if(m.status<STATUS.FETCHING) {
             m.fetch();
+        }
+        else if(m.status==STATUS.SAVED){
+            m.load();
         }
     }
 }
